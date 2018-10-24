@@ -26,21 +26,23 @@ SOFTWARE.
 
 """
 Azure AD OAuth2 backend, docs at:
-    http://psa.matiasaguirre.net/docs/backends/azuread.html
+    https://python-social-auth.readthedocs.io/en/latest/backends/azuread.html
 """
 import time
 
 from jwt import DecodeError, ExpiredSignature, decode as jwt_decode
 
-from social.exceptions import AuthTokenError
-from social.backends.oauth import BaseOAuth2
-
+from ..exceptions import AuthTokenError
+from .oauth import BaseOAuth2
+from django.conf import settings
 
 class AzureADOAuth2(BaseOAuth2):
     name = 'azuread-oauth2'
     SCOPE_SEPARATOR = ' '
-    AUTHORIZATION_URL = 'https://login.microsoftonline.com/common/oauth2/authorize'
-    ACCESS_TOKEN_URL = 'https://login.microsoftonline.com/common/oauth2/token'
+
+    BASE_URL = '{social_auth_oauth_aad_endpoint}/common/oauth2/'
+    AUTHORIZATION_URL = '{base_url}/authorize'
+    ACCESS_TOKEN_URL = '{base_url}/token'
     ACCESS_TOKEN_METHOD = 'POST'
     REDIRECT_STATE = False
     DEFAULT_SCOPE = ['openid', 'profile', 'user_impersonation']
@@ -56,19 +58,40 @@ class AzureADOAuth2(BaseOAuth2):
         ('token_type', 'token_type')
     ]
 
+    @property
+    def base_url(self):
+        return self.BASE_URL.format(social_auth_oauth_aad_endpoint=self.social_auth_oauth_aad_endpoint)
+
+    @property
+    def social_auth_oauth_aad_endpoint(self):
+        endpoint_setting = getattr(settings, 'SOCIAL_AUTH_OAUTH_AAD_ENDPOINT')
+        if not endpoint_setting:
+            endpoint_setting = 'https://login.microsoftonline.com'
+        return endpoint_setting
+
+    def authorization_url(self):
+        return self.AUTHORIZATION_URL.format(base_url=self.base_url)
+
+    def access_token_url(self):
+        return self.ACCESS_TOKEN_URL.format(base_url=self.base_url)
+
     def get_user_id(self, details, response):
-        """Use upn as unique id"""
-        return response.get('upn')
+        "Use upn or email as unique id"
+        answer = response.get('upn')
+        if answer is None:
+            answer = response.get('email')
+        return answer
 
     def get_user_details(self, response):
         """Return user details from Azure AD account"""
         fullname, first_name, last_name = (
             response.get('name', ''),
             response.get('given_name', ''),
-            response.get('family_name', '')
+            response.get('family_name', ''),
         )
+
         return {'username': fullname,
-                'email': response.get('upn'),
+                'email': response.get('email'),
                 'fullname': fullname,
                 'first_name': first_name,
                 'last_name': last_name}
@@ -85,10 +108,10 @@ class AzureADOAuth2(BaseOAuth2):
     def auth_extra_arguments(self):
         """Return extra arguments needed on auth process. The defaults can be
         overriden by GET parameters."""
-        extra_arguments = {}
+        extra_arguments = super(AzureADOAuth2, self).auth_extra_arguments()
         resource = self.setting('RESOURCE')
         if resource:
-            extra_arguments = {'resource': resource}
+            extra_arguments.update({'resource': resource})
         return extra_arguments
 
     def extra_data(self, user, uid, response, details=None, *args, **kwargs):
